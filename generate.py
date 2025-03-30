@@ -4,6 +4,8 @@ import requests
 import base64
 import re
 import json
+import os
+import uuid
 from diffusers import StableDiffusionXLPipeline
 
 def safe_json_parse(response_text):
@@ -155,6 +157,15 @@ def generate_image(prompt, num_steps=50, guidance_scale=7.5):
 
     return image
 
+def ensure_results_directory():
+    """
+    Create results directory if it doesn't exist
+    """
+    results_dir = "results"
+    if not os.path.exists(results_dir):
+        os.makedirs(results_dir)
+    return results_dir
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python generate.py \"Your prompt\"")
@@ -163,25 +174,32 @@ def main():
     prompt = sys.argv[1]
 
     try:
+        # Ensure results directory exists
+        results_dir = ensure_results_directory()
+        
+        # Generate a unique ID for this generation session
+        unique_id = str(uuid.uuid4())
+        
+        # Set up file paths with matching names (different extensions)
+        image_filename = os.path.join(results_dir, f"{unique_id}.png")
+        prompt_filename = os.path.join(results_dir, f"{unique_id}.txt")
+
         # Generate the image
         image = generate_image(prompt)
-        image_filename = "generated_image.png"
         image.save(image_filename)
+        print(f"Image saved: {image_filename}")
 
         # Use the generated image to generate an improved prompt
         generated_prompt = call_ollama(prompt, image_filename)
         print("Generated prompt:", generated_prompt)
 
         # Save the prompt
-        with open("prompt.txt", "w", encoding="utf-8") as f:
+        with open(prompt_filename, "w", encoding="utf-8") as f:
             f.write(generated_prompt)
-
-        print(f"Image saved: {image_filename}")
-        print("Prompt saved in prompt.txt")
+        print(f"Prompt saved: {prompt_filename}")
 
     except Exception as e:
         print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     main()
-
