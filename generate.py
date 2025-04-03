@@ -6,6 +6,7 @@ import re
 import json
 import os
 import uuid
+import argparse
 from diffusers import StableDiffusionXLPipeline
 
 def safe_json_parse(response_text):
@@ -167,36 +168,47 @@ def ensure_results_directory():
     return results_dir
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python generate.py \"Your prompt\"")
-        sys.exit(1)
-
-    prompt = sys.argv[1]
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Generate images with Stable Diffusion")
+    parser.add_argument("prompt", help="Input prompt for image generation")
+    parser.add_argument("-o", "--ollama", type=int, default=1, choices=[0, 1], 
+                        help="Use Ollama for prompt enhancement: 1=yes (default), 0=no")
+    parser.add_argument("-s", "--steps", type=int, default=50,
+                        help="Number of inference steps (default: 50)")
+    parser.add_argument("-g", "--guidance", type=float, default=7.5,
+                        help="Guidance scale (default: 7.5)")
+    
+    args = parser.parse_args()
 
     try:
         # Ensure results directory exists
         results_dir = ensure_results_directory()
-        
+
         # Generate a unique ID for this generation session
         unique_id = str(uuid.uuid4())
-        
+
         # Set up file paths with matching names (different extensions)
         image_filename = os.path.join(results_dir, f"{unique_id}.png")
-        prompt_filename = os.path.join(results_dir, f"{unique_id}.txt")
-
-        # Generate the image
-        image = generate_image(prompt)
+        
+        # Generate the image using the original prompt
+        print(f"Generating image for prompt: {args.prompt}")
+        image = generate_image(args.prompt, args.steps, args.guidance)
         image.save(image_filename)
         print(f"Image saved: {image_filename}")
 
-        # Use the generated image to generate an improved prompt
-        generated_prompt = call_ollama(prompt, image_filename)
-        print("Generated prompt:", generated_prompt)
+        # Only use Ollama if the flag is set to 1
+        if args.ollama == 1:
+            # Use the generated image to generate an improved prompt
+            generated_prompt = call_ollama(args.prompt, image_filename)
+            print("Generated prompt:", generated_prompt)
 
-        # Save the prompt
-        with open(prompt_filename, "w", encoding="utf-8") as f:
-            f.write(generated_prompt)
-        print(f"Prompt saved: {prompt_filename}")
+            # Save the prompt
+            prompt_filename = os.path.join(results_dir, f"{unique_id}.txt")
+            with open(prompt_filename, "w", encoding="utf-8") as f:
+                f.write(generated_prompt)
+            print(f"Prompt saved: {prompt_filename}")
+        else:
+            print("Ollama prompt enhancement skipped.")
 
     except Exception as e:
         print(f"An error occurred: {e}")
