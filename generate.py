@@ -131,7 +131,7 @@ def call_ollama(prompt, image_path=None, model="llava:13b"):
         print(f"Error calling Ollama: {e}")
         return prompt
 
-def generate_image(prompt, num_steps=50, guidance_scale=7.5):
+def generate_image(prompt, num_steps=50, guidance_scale=7.5, width=1024, height=1024):
     """
     Generate image with Stable Diffusion
     """
@@ -153,7 +153,9 @@ def generate_image(prompt, num_steps=50, guidance_scale=7.5):
     image = pipe(
         prompt=prompt,
         num_inference_steps=num_steps,
-        guidance_scale=guidance_scale
+        guidance_scale=guidance_scale,
+        width=width,
+        height=height
     ).images[0]
 
     return image
@@ -167,17 +169,54 @@ def ensure_results_directory():
         os.makedirs(results_dir)
     return results_dir
 
+def parse_size(size_str):
+    """
+    Parse the size string into width and height
+    """
+    sizes = {
+        "square": (1024, 1024),
+        "portrait": (1024, 1280),
+        "landscape": (1280, 1024),
+        "wide": (1536, 896),
+        "tall": (896, 1536),
+        "cinematic": (1920, 832),
+        "sdxl": (1024, 1024)  # Default SDXL size
+    }
+    
+    # Check if it's a predefined size
+    if size_str.lower() in sizes:
+        return sizes[size_str.lower()]
+    
+    # Check if it's a custom size in "widthxheight" format
+    if "x" in size_str:
+        try:
+            width, height = map(int, size_str.split("x"))
+            # Ensure dimensions are valid (multiples of 8 for SDXL)
+            width = max(256, (width // 8) * 8)
+            height = max(256, (height // 8) * 8)
+            return width, height
+        except ValueError:
+            pass
+    
+    # Return default size if parsing fails
+    print(f"Invalid size format: {size_str}. Using default size (1024x1024).")
+    return sizes["sdxl"]
+
 def main():
     # Set up argument parser
     parser = argparse.ArgumentParser(description="Generate images with Stable Diffusion")
     parser.add_argument("prompt", help="Input prompt for image generation")
-    parser.add_argument("-o", "--ollama", type=int, default=1, choices=[0, 1], 
+    parser.add_argument("-o", "--ollama", type=int, default=1, choices=[0, 1],
                         help="Use Ollama for prompt enhancement: 1=yes (default), 0=no")
     parser.add_argument("-s", "--steps", type=int, default=50,
                         help="Number of inference steps (default: 50)")
     parser.add_argument("-g", "--guidance", type=float, default=7.5,
                         help="Guidance scale (default: 7.5)")
-    
+    parser.add_argument("-z", "--size", type=str, default="square",
+                        help="Image size: 'square' (1024x1024), 'portrait' (1024x1280), 'landscape' (1280x1024), " +
+                             "'wide' (1536x896), 'tall' (896x1536), 'cinematic' (1920x832), " +
+                             "or custom dimensions as 'widthxheight' (e.g., '1024x768')")
+
     args = parser.parse_args()
 
     try:
@@ -189,10 +228,14 @@ def main():
 
         # Set up file paths with matching names (different extensions)
         image_filename = os.path.join(results_dir, f"{unique_id}.png")
-        
-        # Generate the image using the original prompt
+
+        # Parse image size
+        width, height = parse_size(args.size)
+        print(f"Using image dimensions: {width}x{height}")
+
+        # Generate the image using the original prompt and specified size
         print(f"Generating image for prompt: {args.prompt}")
-        image = generate_image(args.prompt, args.steps, args.guidance)
+        image = generate_image(args.prompt, args.steps, args.guidance, width, height)
         image.save(image_filename)
         print(f"Image saved: {image_filename}")
 
