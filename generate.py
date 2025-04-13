@@ -7,7 +7,7 @@ import json
 import os
 import uuid
 import argparse
-from diffusers import StableDiffusionXLPipeline
+from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline
 
 def safe_json_parse(response_text):
     """
@@ -131,7 +131,40 @@ def call_ollama(prompt, image_path=None, model="llava:13b"):
         print(f"Error calling Ollama: {e}")
         return prompt
 
-def generate_image(prompt, num_steps=50, guidance_scale=7.5, width=1024, height=1024):
+def get_sd_model_info(model_name):
+    """
+    Get model configuration based on model name
+    """
+    models = {
+        "sdxl": {
+            "class": StableDiffusionXLPipeline,
+            "path": "stabilityai/stable-diffusion-xl-base-1.0",
+            "default_size": (1024, 1024)
+        },
+        "sd15": {
+            "class": StableDiffusionPipeline,
+            "path": "runwayml/stable-diffusion-v1-5",
+            "default_size": (512, 512)
+        },
+        "sd21": {
+            "class": StableDiffusionPipeline,
+            "path": "stabilityai/stable-diffusion-2-1",
+            "default_size": (768, 768)
+        },
+        "dreamshaper": {
+            "class": StableDiffusionPipeline, 
+            "path": "Lykon/dreamshaper-7",
+            "default_size": (512, 512)
+        }
+    }
+    
+    if model_name not in models:
+        print(f"Unknown model: {model_name}. Using SDXL as default.")
+        return models["sdxl"]
+    
+    return models[model_name]
+
+def generate_image(prompt, num_steps=50, guidance_scale=7.5, width=1024, height=1024, sd_model="sdxl"):
     """
     Generate image with Stable Diffusion
     """
@@ -142,11 +175,25 @@ def generate_image(prompt, num_steps=50, guidance_scale=7.5, width=1024, height=
         print("CUDA not available. Using CPU (will be much slower)")
         device = "cpu"
 
-    pipe = StableDiffusionXLPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        use_safetensors=True
-    ).to(device)
+    # Get model configuration
+    model_info = get_sd_model_info(sd_model)
+    
+    # Memory optimization for smaller models
+    if device == "cuda" and sd_model != "sdxl":
+        # Enable attention slicing for memory efficiency
+        with torch.cuda.amp.autocast():
+            pipe = model_info["class"].from_pretrained(
+                model_info["path"],
+                torch_dtype=torch.float16,
+                use_safetensors=True
+            ).to(device)
+            pipe.enable_attention_slicing()
+    else:
+        pipe = model_info["class"].from_pretrained(
+            model_info["path"],
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            use_safetensors=True
+        ).to(device)
 
     pipe.safety_checker = None
 
@@ -169,38 +216,41 @@ def ensure_results_directory():
         os.makedirs(results_dir)
     return results_dir
 
-def parse_size(size_str):
+def parse_size(size_str, sd_model="sdxl"):
     """
     Parse the size string into width and height
     """
-    sizes = {
-        "square": (1024, 1024),
-        "portrait": (1024, 1280),
-        "landscape": (1280, 1024),
-        "wide": (1536, 896),
-        "tall": (896, 1536),
-        "cinematic": (1920, 832),
-        "sdxl": (1024, 1024)  # Default SDXL size
-    }
+    # Get default size for the selected model
+    default_size = get_sd_model_info(sd_model)["default_size"]
     
+    sizes = {
+        "square": default_size,
+        "portrait": (default_size[0], int(default_size[1] * 1.25)),
+        "landscape": (int(default_size[0] * 1.25), default_size[1]),
+        "wide": (int(default_size[0] * 1.5), int(default_size[1] * 0.875)),
+        "tall": (int(default_size[0] * 0.875), int(default_size[1] * 1.5)),
+        "cinematic": (int(default_size[0] * 1.875), int(default_size[1] * 0.8125)),
+        "default": default_size
+    }
+
     # Check if it's a predefined size
     if size_str.lower() in sizes:
         return sizes[size_str.lower()]
-    
+
     # Check if it's a custom size in "widthxheight" format
     if "x" in size_str:
         try:
             width, height = map(int, size_str.split("x"))
-            # Ensure dimensions are valid (multiples of 8 for SDXL)
+            # Ensure dimensions are valid (multiples of 8)
             width = max(256, (width // 8) * 8)
             height = max(256, (height // 8) * 8)
             return width, height
         except ValueError:
             pass
-    
+
     # Return default size if parsing fails
-    print(f"Invalid size format: {size_str}. Using default size (1024x1024).")
-    return sizes["sdxl"]
+    print(f"Invalid size format: {size_str}. Using default size for {sd_model}: {default_size[0]}x{default_size[1]}.")
+    return default_size
 
 def main():
     # Set up argument parser
@@ -213,9 +263,10 @@ def main():
     parser.add_argument("-g", "--guidance", type=float, default=7.5,
                         help="Guidance scale (default: 7.5)")
     parser.add_argument("-z", "--size", type=str, default="square",
-                        help="Image size: 'square' (1024x1024), 'portrait' (1024x1280), 'landscape' (1280x1024), " +
-                             "'wide' (1536x896), 'tall' (896x1536), 'cinematic' (1920x832), " +
-                             "or custom dimensions as 'widthxheight' (e.g., '1024x768')")
+                        help="Image size: 'square', 'portrait', 'landscape', 'wide', 'tall', 'cinematic', " +
+                             "or custom dimensions as 'widthxheight' (e.g., '512x512')")
+    parser.add_argument("-m", "--model", type=str, default="sdxl", choices=["sdxl", "sd15", "sd21", "dreamshaper"],
+                        help="Stable Diffusion model: 'sdxl' (default), 'sd15' (SD 1.5), 'sd21' (SD 2.1), 'dreamshaper'")
 
     args = parser.parse_args()
 
@@ -229,13 +280,14 @@ def main():
         # Set up file paths with matching names (different extensions)
         image_filename = os.path.join(results_dir, f"{unique_id}.png")
 
-        # Parse image size
-        width, height = parse_size(args.size)
+        # Parse image size based on selected model
+        width, height = parse_size(args.size, args.model)
+        print(f"Using model: {args.model}")
         print(f"Using image dimensions: {width}x{height}")
 
         # Generate the image using the original prompt and specified size
         print(f"Generating image for prompt: {args.prompt}")
-        image = generate_image(args.prompt, args.steps, args.guidance, width, height)
+        image = generate_image(args.prompt, args.steps, args.guidance, width, height, args.model)
         image.save(image_filename)
         print(f"Image saved: {image_filename}")
 
@@ -255,6 +307,8 @@ def main():
 
     except Exception as e:
         print(f"An error occurred: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
